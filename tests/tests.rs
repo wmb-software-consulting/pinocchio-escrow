@@ -18,7 +18,7 @@ use solana_sdk::{
 use pinocchio_token::{ ID as TOKEN_PROGRAM_ID };
 use pinocchio_associated_token_account::{ ID as ATA_PROGRAM_ID };
 
-use pinocchio_escrow::{ load_acc, to_bytes, Escrow, Make, MakeInstructionData, Take, ID };
+use pinocchio_escrow::{ load_acc, to_bytes, Escrow, Make, MakeInstructionData, Refund, Take, ID };
 
 use litesvm::LiteSVM;
 use spl_associated_token_account_client::address::get_associated_token_address;
@@ -359,7 +359,7 @@ fn test_take() {
 }
 
 #[test]
-fn test_take_with_initiated_accounts() {
+fn test_take_with_initiated_ata() {
     let mut svm = LiteSVM::new();
 
     let bytes = include_bytes!("../target/deploy/pinocchio_escrow.so");
@@ -619,6 +619,274 @@ fn test_take_with_initiated_accounts() {
     assert_eq!(taker_ata_b_data.owner, taker);
     assert_eq!(taker_ata_b_data.mint, mint_b_pubkey);
     assert_eq!(taker_ata_b_data.amount, 0 * LAMPORTS_PER_SOL);
+}
+
+#[test]
+fn test_refund() {
+    let mut svm = LiteSVM::new();
+
+    let bytes = include_bytes!("../target/deploy/pinocchio_escrow.so");
+    svm.add_program(PROGRAM, bytes);
+
+    let maker_keypair = Keypair::new();
+    let maker = maker_keypair.pubkey();
+
+    let mint_authority = Keypair::new();
+    svm.airdrop(&maker, 100 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&mint_authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+    let seed = 123456789u64;
+    let (escrow, escrow_bump) = solana_sdk::pubkey::Pubkey::find_program_address(
+        &[b"escrow".as_slice(), &maker.to_bytes(), seed.to_le_bytes().as_ref()],
+        &PROGRAM
+    );
+
+    let (tx, usdc_mint, _) = mint(
+        &mint_authority,
+        &maker_keypair,
+        30 * LAMPORTS_PER_SOL,
+        svm.latest_blockhash()
+    );
+
+    let maker_ata_a_pubkey = get_associated_token_address(&maker, &usdc_mint);
+
+    let result = svm.send_transaction(tx);
+    assert!(result.is_ok(), "Transaction failed: {:?}", result);
+
+    let mint_b_pubkey = Pubkey::new_from_array([0x3; 32]);
+
+    let escrow_data = Escrow {
+        is_initialized: true,
+        seed,
+        maker: maker.to_bytes(),
+        mint_a: usdc_mint.to_bytes(),
+        mint_b: mint_b_pubkey.to_bytes(),
+        receive: 15 * LAMPORTS_PER_SOL,
+        bump: escrow_bump,
+    };
+
+    svm.set_account(escrow, Account {
+        lamports: 10 * LAMPORTS_PER_SOL,
+        data: unsafe {
+            to_bytes(&escrow_data).to_vec()
+        },
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    }).unwrap();
+
+    let vault_data = SPLTokenAccount {
+        is_native: COption::None,
+        mint: usdc_mint,
+        owner: escrow,
+        amount: 10 * LAMPORTS_PER_SOL,
+        state: spl_token::state::AccountState::Initialized,
+        delegate: COption::None,
+        delegated_amount: 0,
+        close_authority: COption::None,
+    };
+
+    let mut vault_data_bytes = [0u8; SPLTokenAccount::LEN];
+    SPLTokenAccount::pack(vault_data, &mut vault_data_bytes).unwrap();
+
+    let vault_pubkey = get_associated_token_address(&escrow, &usdc_mint);
+    svm.set_account(vault_pubkey, Account {
+        lamports: 10 * LAMPORTS_PER_SOL,
+        data: vault_data_bytes.to_vec(),
+        owner: Pubkey::new_from_array(TOKEN_PROGRAM_ID),
+        executable: false,
+        rent_epoch: 0,
+    }).unwrap();
+
+    let instruction = Instruction::new_with_bytes(
+        PROGRAM,
+        &[*Refund::DISCRIMINATOR],
+        vec![
+            AccountMeta::new(maker, true),
+            AccountMeta::new(escrow, false),
+            AccountMeta::new_readonly(usdc_mint, false),
+            AccountMeta::new(vault_pubkey, false),
+            AccountMeta::new(maker_ata_a_pubkey, false),
+            AccountMeta::new_readonly(Pubkey::new_from_array(ATA_PROGRAM_ID), false),
+            AccountMeta::new_readonly(Pubkey::new_from_array(TOKEN_PROGRAM_ID), false),
+            AccountMeta::new_readonly(system_program::ID, false)
+        ]
+    );
+
+    let maker_ata_a_info = svm.get_account(&maker_ata_a_pubkey).unwrap();
+    let maker_ata_a_data = SPLTokenAccount::unpack(&maker_ata_a_info.data).unwrap();
+    assert_eq!(maker_ata_a_data.owner, maker);
+    assert_eq!(maker_ata_a_data.mint, usdc_mint);
+    assert_eq!(maker_ata_a_data.amount, 30 * LAMPORTS_PER_SOL);
+
+    let escrow_account = svm.get_account(&escrow);
+    let escrow_account_data = unsafe {
+        *load_acc::<Escrow>(&mut escrow_account.unwrap().data).unwrap()
+    };
+    assert_eq!(escrow_account_data.is_initialized, true);
+    assert_eq!(escrow_account_data.seed, seed);
+    assert_eq!(escrow_account_data.maker, maker.to_bytes());
+    assert_eq!(escrow_account_data.mint_a, usdc_mint.to_bytes());
+    assert_eq!(escrow_account_data.mint_b, mint_b_pubkey.to_bytes());
+    assert_eq!(escrow_account_data.receive, 15 * LAMPORTS_PER_SOL);
+    assert_eq!(escrow_account_data.bump, escrow_bump);
+
+    let vault_ata_info = svm.get_account(&vault_pubkey).unwrap();
+    let vault_ata_data = SPLTokenAccount::unpack(&vault_ata_info.data).unwrap();
+    assert_eq!(vault_ata_data.owner, escrow);
+    assert_eq!(vault_ata_data.mint, usdc_mint);
+    assert_eq!(vault_ata_data.amount, 10 * LAMPORTS_PER_SOL);
+
+    let tx = Transaction::new(
+        &[&maker_keypair],
+        Message::new(&[instruction], Some(&maker)),
+        svm.latest_blockhash()
+    );
+    let result = svm.send_transaction(tx);
+    assert!(result.is_ok(), "Transaction failed: {:?}", result);
+
+    let maker_ata_a_info = svm.get_account(&maker_ata_a_pubkey).unwrap();
+    let maker_ata_a_data = SPLTokenAccount::unpack(&maker_ata_a_info.data).unwrap();
+    assert_eq!(maker_ata_a_data.owner, maker);
+    assert_eq!(maker_ata_a_data.mint, usdc_mint);
+    assert_eq!(maker_ata_a_data.amount, 40 * LAMPORTS_PER_SOL);
+
+    let vault_ata_info = svm.get_account(&vault_pubkey).unwrap();
+    assert_eq!(vault_ata_info.lamports, 0);
+    assert!(vault_ata_info.data.is_empty());
+}
+
+#[test]
+fn test_refund_with_initiated_ata() {
+    let mut svm = LiteSVM::new();
+
+    let bytes = include_bytes!("../target/deploy/pinocchio_escrow.so");
+    svm.add_program(PROGRAM, bytes);
+
+    let maker_keypair = Keypair::new();
+    let maker = maker_keypair.pubkey();
+
+    let mint_authority = Keypair::new();
+    svm.airdrop(&maker, 100 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&mint_authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+    let seed = 123456789u64;
+    let (escrow, escrow_bump) = solana_sdk::pubkey::Pubkey::find_program_address(
+        &[b"escrow".as_slice(), &maker.to_bytes(), seed.to_le_bytes().as_ref()],
+        &PROGRAM
+    );
+
+    let (tx, usdc_mint, maker_ata_a_pubkey) = mint(
+        &mint_authority,
+        &maker_keypair,
+        30 * LAMPORTS_PER_SOL,
+        svm.latest_blockhash()
+    );
+
+    let result = svm.send_transaction(tx);
+    assert!(result.is_ok(), "Transaction failed: {:?}", result);
+
+    let mint_b_pubkey = Pubkey::new_from_array([0x3; 32]);
+
+    let escrow_data = Escrow {
+        is_initialized: true,
+        seed,
+        maker: maker.to_bytes(),
+        mint_a: usdc_mint.to_bytes(),
+        mint_b: mint_b_pubkey.to_bytes(),
+        receive: 15 * LAMPORTS_PER_SOL,
+        bump: escrow_bump,
+    };
+
+    svm.set_account(escrow, Account {
+        lamports: 10 * LAMPORTS_PER_SOL,
+        data: unsafe {
+            to_bytes(&escrow_data).to_vec()
+        },
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    }).unwrap();
+
+    let vault_data = SPLTokenAccount {
+        is_native: COption::None,
+        mint: usdc_mint,
+        owner: escrow,
+        amount: 10 * LAMPORTS_PER_SOL,
+        state: spl_token::state::AccountState::Initialized,
+        delegate: COption::None,
+        delegated_amount: 0,
+        close_authority: COption::None,
+    };
+
+    let mut vault_data_bytes = [0u8; SPLTokenAccount::LEN];
+    SPLTokenAccount::pack(vault_data, &mut vault_data_bytes).unwrap();
+
+    let vault_pubkey = get_associated_token_address(&escrow, &usdc_mint);
+    svm.set_account(vault_pubkey, Account {
+        lamports: 10 * LAMPORTS_PER_SOL,
+        data: vault_data_bytes.to_vec(),
+        owner: Pubkey::new_from_array(TOKEN_PROGRAM_ID),
+        executable: false,
+        rent_epoch: 0,
+    }).unwrap();
+
+    let instruction = Instruction::new_with_bytes(
+        PROGRAM,
+        &[*Refund::DISCRIMINATOR],
+        vec![
+            AccountMeta::new(maker, true),
+            AccountMeta::new(escrow, false),
+            AccountMeta::new_readonly(usdc_mint, false),
+            AccountMeta::new(vault_pubkey, false),
+            AccountMeta::new(maker_ata_a_pubkey, false),
+            AccountMeta::new_readonly(Pubkey::new_from_array(ATA_PROGRAM_ID), false),
+            AccountMeta::new_readonly(Pubkey::new_from_array(TOKEN_PROGRAM_ID), false),
+            AccountMeta::new_readonly(system_program::ID, false)
+        ]
+    );
+
+    let maker_ata_a_info = svm.get_account(&maker_ata_a_pubkey).unwrap();
+    let maker_ata_a_data = SPLTokenAccount::unpack(&maker_ata_a_info.data).unwrap();
+    assert_eq!(maker_ata_a_data.owner, maker);
+    assert_eq!(maker_ata_a_data.mint, usdc_mint);
+    assert_eq!(maker_ata_a_data.amount, 30 * LAMPORTS_PER_SOL);
+
+    let escrow_account = svm.get_account(&escrow);
+    let escrow_account_data = unsafe {
+        *load_acc::<Escrow>(&mut escrow_account.unwrap().data).unwrap()
+    };
+    assert_eq!(escrow_account_data.is_initialized, true);
+    assert_eq!(escrow_account_data.seed, seed);
+    assert_eq!(escrow_account_data.maker, maker.to_bytes());
+    assert_eq!(escrow_account_data.mint_a, usdc_mint.to_bytes());
+    assert_eq!(escrow_account_data.mint_b, mint_b_pubkey.to_bytes());
+    assert_eq!(escrow_account_data.receive, 15 * LAMPORTS_PER_SOL);
+    assert_eq!(escrow_account_data.bump, escrow_bump);
+
+    let vault_ata_info = svm.get_account(&vault_pubkey).unwrap();
+    let vault_ata_data = SPLTokenAccount::unpack(&vault_ata_info.data).unwrap();
+    assert_eq!(vault_ata_data.owner, escrow);
+    assert_eq!(vault_ata_data.mint, usdc_mint);
+    assert_eq!(vault_ata_data.amount, 10 * LAMPORTS_PER_SOL);
+
+    let tx = Transaction::new(
+        &[&maker_keypair],
+        Message::new(&[instruction], Some(&maker)),
+        svm.latest_blockhash()
+    );
+    let result = svm.send_transaction(tx);
+    assert!(result.is_ok(), "Transaction failed: {:?}", result);
+
+    let maker_ata_a_info = svm.get_account(&maker_ata_a_pubkey).unwrap();
+    let maker_ata_a_data = SPLTokenAccount::unpack(&maker_ata_a_info.data).unwrap();
+    assert_eq!(maker_ata_a_data.owner, maker);
+    assert_eq!(maker_ata_a_data.mint, usdc_mint);
+    assert_eq!(maker_ata_a_data.amount, 40 * LAMPORTS_PER_SOL);
+
+    let vault_ata_info = svm.get_account(&vault_pubkey).unwrap();
+    assert_eq!(vault_ata_info.lamports, 0);
+    assert!(vault_ata_info.data.is_empty());
 }
 
 #[test]
