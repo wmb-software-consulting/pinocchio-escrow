@@ -1,7 +1,6 @@
 use pinocchio::{
     account_info::AccountInfo,
     instruction::{ Seed, Signer },
-    msg,
     program_error::ProgramError,
     ProgramResult,
 };
@@ -162,7 +161,6 @@ impl<'a> Take<'a> {
     pub fn process(&mut self) -> ProgramResult {
         self.create_if_needed_taker_ata_a()?;
 
-        msg!("TakeAccounts: Taker ATA A Bump: {}, Taker ATA B Bump: {}");
         self.create_if_needed_maker_ata_b()?;
 
         let escrow_acc = (unsafe {
