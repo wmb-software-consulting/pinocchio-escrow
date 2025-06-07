@@ -1,0 +1,31 @@
+[package]
+name = "pinocchio_escrow"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+pinocchio = "0.8.4"
+pinocchio-associated-token-account = "0.1.1"
+pinocchio-log = "0.4.0"
+pinocchio-system = "0.2.3"
+pinocchio-token = "0.3.0"
+ 
+
+[dev-dependencies] 
+solana-program-runtime = ">=2.2,<=2.2.4"
+solana-feature-set = "^2.2.1"
+litesvm = "0.6.1"
+# mollusk-svm = "0.1.5"
+# mollusk-svm-programs-token = "0.1.5"
+solana-sdk = "2.2.1"
+spl-token = "8.0.0"
+spl-associated-token-account-client = "2.0.0"
+solana-hash = "2.2.1"
+
+[features]
+no-bpf-entrypoint = []
+std = []
+test = ["no-bpf-entrypoint", "std"]
