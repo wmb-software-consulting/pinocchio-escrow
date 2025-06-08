@@ -10,9 +10,11 @@ The escrow program facilitates the exchange of two different tokens between a ma
 
 This program was built using the [Pinocchio](https://github.com/anza-xyz/pinocchio) library, a framework for developing Solana programs with a focus on security and efficiency.
 
-## Tests with LiteSVM
+## Tests with Mollusk
 
-The program includes a comprehensive suite of tests built using the [LiteSVM](https://github.com/LiteSVM/litesvm) library, providing a lightweight and efficient environment for testing Solana programs.
+The program includes a comprehensive suite of tests built using the [mollusk](https://github.com/anza-xyz/mollusk) library, providing a a lightweight test harness for Solana programs. It provides a simple interface for testing Solana program executions in a minified Solana Virtual Machine (SVM) environment.
+
+It does not create any semblance of a validator runtime, but instead provisions a program execution pipeline directly from lower-level SVM components.
 
 ## Setup
 
