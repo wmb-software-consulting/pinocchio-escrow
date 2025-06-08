@@ -6,16 +6,13 @@ use pinocchio::{
 
 use pinocchio_token::state::{ Mint, TokenAccount };
 
-use crate::{ load_acc_unchecked, CustomError, DataLen, Initialized };
+use crate::{ load_acc_unchecked, CustomError, DataLen, Initialized, ID };
 
 pub fn validate_acc<'a, T: DataLen + Initialized>(
     acc: &'a AccountInfo,
     is_initialized: bool,
     seeds: Option<&[&[u8]]>
 ) -> Result<(Option<&'a T>, u8), ProgramError> {
-    if !acc.is_owned_by(&pinocchio_system::ID) {
-        return Err(ProgramError::InvalidAccountOwner);
-    }
     if !is_initialized && (acc.lamports().ne(&0) || !acc.data_is_empty()) {
         return Err(ProgramError::AccountAlreadyInitialized);
     }
@@ -23,6 +20,9 @@ pub fn validate_acc<'a, T: DataLen + Initialized>(
         return Err(ProgramError::UninitializedAccount);
     }
     if is_initialized {
+        if !acc.is_owned_by(&ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
         let loaded_acc = (unsafe {
             load_acc_unchecked::<T>(acc.borrow_data_unchecked()).map_err(
                 |_| CustomError::InvalidInstructionData
@@ -30,6 +30,9 @@ pub fn validate_acc<'a, T: DataLen + Initialized>(
         })?;
         Ok((Some(loaded_acc), loaded_acc.bump()))
     } else if let Some(seeds) = seeds {
+        if !acc.is_owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
         let (key, bump) = find_program_address(seeds, &crate::ID);
         if acc.key().ne(&key) {
             return Err(ProgramError::InvalidArgument);
