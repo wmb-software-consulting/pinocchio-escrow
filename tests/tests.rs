@@ -217,7 +217,7 @@ fn test_take() {
         data: unsafe {
             to_bytes(&escrow_data).to_vec()
         },
-        owner: system_program::ID,
+        owner: PROGRAM,
         executable: false,
         rent_epoch: 0,
     }).unwrap();
@@ -426,7 +426,7 @@ fn test_take_with_initiated_ata() {
         data: unsafe {
             to_bytes(&escrow_data).to_vec()
         },
-        owner: system_program::ID,
+        owner: PROGRAM,
         executable: false,
         rent_epoch: 0,
     }).unwrap();
@@ -670,7 +670,7 @@ fn test_refund() {
         data: unsafe {
             to_bytes(&escrow_data).to_vec()
         },
-        owner: system_program::ID,
+        owner: PROGRAM,
         executable: false,
         rent_epoch: 0,
     }).unwrap();
@@ -803,7 +803,7 @@ fn test_refund_with_initiated_ata() {
         data: unsafe {
             to_bytes(&escrow_data).to_vec()
         },
-        owner: system_program::ID,
+        owner: PROGRAM,
         executable: false,
         rent_epoch: 0,
     }).unwrap();
